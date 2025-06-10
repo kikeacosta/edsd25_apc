@@ -41,6 +41,8 @@ qt <- 5
 scale1 <- colorRampPalette(c(col1, col2), space = "Lab")(qt)
 scale1
 
+# "#0019FF" "#9900C2" "#C80088" "#E7004F" "#FF0000"
+
 # 2. unit scales for plotting mortality ====
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -245,7 +247,8 @@ redo_lexis_shape(pmin,pmax,amin,amax)
 dt2 <- 
   dt %>% 
   filter(year %in% pmin:pmax,
-         age %in% amin:amax)
+         age %in% amin:amax,
+         sex == "female")
   
 # quick plot of log_rates
 dt2 %>%
@@ -261,6 +264,7 @@ dt2 %>%
 # lets add a nice scale color, package viridis has some nice options
 # https://cran.r-project.org/web/packages/viridis/vignettes/intro-to-viridis.html
 dt2 %>%
+  # filter(sex == "male") %>% 
   ggplot(aes(x = year, y = age, z = mx))+
   geom_tile(aes(fill = mx))+
   # adding a viridis scale
@@ -273,6 +277,7 @@ dt2 %>%
 
 # you can modify the option parameter for other nice palettes
 dt2 %>%
+  # filter(sex == "male") %>% 
   ggplot(aes(x = year, y = age, z = mx))+
   geom_tile(aes(fill = mx))+
   # adding a viridis scale
