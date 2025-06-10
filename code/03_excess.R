@@ -9,76 +9,34 @@ source("code/00_setup.R")
 # 3 baselines: 3 colors
 cols <- brewer.pal(3, "Dark2")
 
-
 # loading mortality data ====
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+dt <- read_rds("data_input/canada_weekly_deaths_pop_2015_2023.rds")
 
-# from STMF
-# ~~~~~~~~~
-# downloading the last version of STMF Mortality input data zip 
-# hint: input STMF is much better than the output because it comes in 
-# finer age groups resolution (usually 5-y)! 
-
-# list of country codes in STMF
-zip_files <- unzip("data_input/STMFinput.zip", list = TRUE)
-
-zip_files
-
-# lets look at Canadian data, total sex, all ages, since 2015
-cd <- "CAN"
-sx <- "b"
-ag <- "TOT"
-ymin <- 2015
-
-file_name <- zip_files %>% filter(str_detect(Name, cd)) %>% pull(Name)
-
-dt <- 
-  read_csv(unz("data_input/STMFinput.zip", file_name)) %>% 
-  mutate(Week = as.double(Week))
-
-dt
-
-# adding date to each ISO week, using the package ISOweek
-# we need the week in this format: 2000-W01-7
-dt2 <- 
-  dt %>% 
-  # renaming all variablees to lower case
-  rename_with(str_to_lower) %>% 
-  # adding the date
-  mutate(isoweek = paste0(year, "-W", sprintf("%02d", week), "-7"),
-         date = ISOweek2date(isoweek)) %>% 
-  filter(age == ag,
-         sex == sx,
-         year >= ymin) %>% 
-  select(code = popcode, year, week, dts = deaths, date)
-
-dt2 %>% 
+dt %>% 
   ggplot()+
   geom_line(aes(date, dts), linewidth = 1)+
   theme_bw()
-# ggsave("figures/p0.png",
-#        w = 6, h = 2)
-
 
 # ######################################
 # estimating the baseline mortality ====
 # ######################################
 
-
+# ~~~~~~~~~~~~~~~~~
 # average-week ====
-# ~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~
 # the simplest approach (maybe the worst)
 
 # estimating the average weekly deaths for the whole training period
 # as the baseline
 w_av <- 
-  dt2 %>% 
+  dt %>% 
   filter(year <= 2019) %>%
   summarise(bsn = mean(dts, na.rm = TRUE)) %>% 
   pull(bsn)
 
 dt_w_av <- 
-  dt2 %>% 
+  dt %>% 
   mutate(bsn = w_av)
 
 dt_w_av %>% 
@@ -87,20 +45,19 @@ dt_w_av %>%
   geom_line(aes(date, bsn), linewidth = 1, col = cols[1])+
   geom_vline(xintercept = ymd("2020-03-15"), linetype = "dashed")+
   theme_bw()
-# ggsave("figures/p1.png",
-#        w = 6, h = 2)
 
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Week-specific average ====
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~
 ws_av <- 
-  dt2 %>% 
+  dt %>% 
   filter(year <= 2019) %>%
   group_by(week) %>% 
   summarise(bsn = mean(dts, na.rm = TRUE)) %>% 
   ungroup()
 
 dt_ws_av <- 
-  dt2 %>% 
+  dt %>% 
   left_join(ws_av)
 
 dt_ws_av %>% 
@@ -109,102 +66,26 @@ dt_ws_av %>%
   geom_line(aes(date, bsn), linewidth = 1, col = cols[2])+
   geom_vline(xintercept = ymd("2020-03-15"), linetype = "dashed")+
   theme_bw()
-# ggsave("figures/p2.png",
-#        w = 6, h = 2)
+
 
 # it seems not bad at all!!
 
-
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Excess mortality using a Poisson model ====
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-# we need: weekly deaths and exposures
-
-# exposures
-# ~~~~~~~~~
-# issue: population counts only available annually
-# solution: interpolation
-
-# loading total population counts from WPP 
-pop <- read_rds("data_input/wpp2022_pop.rds")
-
-unique(pop$code)
-
-# selecting the Canadian population
-pop2 <- 
-  pop %>% 
-  filter(code == cd) %>%
-  select(year, pop) %>% 
-  mutate(week = 26)
-
-# from annual to weekly exposures
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# wee need weekly exposures between 2010 and 2023
-# then, we can interpolate between 2009 and 2024
-
-# first, create a grid with all weeks that we need to populate with 
-# weekly exposures
-pop_empty <- 
-  # 52 weeks per year
-  expand_grid(year = 2009:2024, week = 1:52) %>% 
-  # adding extra weeks for leap years 2009, 2015, and 2020
-  bind_rows(tibble(year = c(2009, 2015, 2020), week = 53)) %>% 
-  # arrange it chronologically
-  arrange(year, week)
-
-# preparing data for interpolation
-pop_inter <- 
-  pop_empty %>%  
-  # adding annual population in midyear to week 26 (the midyear week!)
-  left_join(pop2) %>% 
-  mutate(t = 1:n(), # creating a continuous variable for week sequence 
-         # transforming year-week to date, using ISOweek2date() function
-         isoweek = paste0(year, "-W", sprintf("%02d", week), "-7"),
-         date = ISOweek2date(isoweek))
-
-# extracting values for interpolation
-xs <- pop_inter %>% drop_na() %>% pull(t) # weeks with data
-ys <- pop_inter %>% drop_na() %>% pull(pop) # available pop data
-ts <- pop_inter %>% pull(t) # all weeks in which we need estimates
-
-# smoothing using cubic splines
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# the "spline()" function allows to interpolate by constraining the curve 
-# to match the original data. In other words, it is strictly interpolation 
-# rather than smoothing  
-
-# extracting predictions from the model
-interpolated_pop <- spline(xs, ys, xout = ts)
-
-pop_inter2 <- 
-  pop_inter %>% 
-  mutate(pop2 = interpolated_pop$y)
-
-# visualizing annual values and weekly estimates
-pop_inter2 %>% 
-  ggplot()+
-  geom_line(aes(date, pop2), linewidth = 1)+
-  geom_point(aes(date, pop), col = "red", size = 3)+
-  theme_bw()
-
-# weekly exposures to use
-pop3 <- 
-  pop_inter2 %>% 
-  select(-pop, -t, -isoweek) %>% 
-  rename(pop = pop2)
-
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-# merging deaths and exposures
-dt3 <- 
-  dt2 %>% 
-  left_join(pop3) %>% # merging with weekly population
+# let's adjust a bit the data to take advantage of information on the 
+# population exposed to risk 
+dt2 <- 
+  dt %>% # merging with weekly population
   mutate(exposure = pop / 52, # exposure in person-weeks
          t = 1:n(), # a variable for the secular trend 
          w = ifelse(date <= "2020-03-15", 1, 0)) # a variable for the weights 
 
+# Fitting a GAM model to estimate expected mortality ====
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-# GAM models allow us to include parametric and semiparametric terms together 
+# GAM models allow us to include parametric and semi-parametric terms together 
 # the "mgcv" package is very convenient for working with GAM models
 # https://cran.r-project.org/web/packages/mgcv/mgcv.pdf
 
@@ -219,7 +100,7 @@ gam_model <-
         offset(log(exposure)), 
       # to avoid including the pandemic period in the baseline estimation
       weights = w, 
-      data = dt3, 
+      data = dt2, 
       # using a quasipoisson distribution to account for overdispersion
       family = "quasipoisson") 
 
@@ -228,14 +109,14 @@ summary(gam_model)
 
 # weekly slope (t) = 0.00012142
 (exp(0.00012657)-1)*100
-
+# 0.013% increase every week
 
 # example for predicting estimates
-bsn_poi <- predict(gam_model, newdata = dt3, type = "response", se.fit = TRUE)
+bsn_poi <- predict(gam_model, newdata = dt2, type = "response", se.fit = TRUE)
 
 # obtaining estimates for the three models
 bsn <- 
-  dt3 %>% 
+  dt2 %>% 
   mutate(bsn = bsn_poi$fit,
          se = bsn_poi$se.fit,
          ll = bsn - 1.96*se,
@@ -248,9 +129,6 @@ bsn %>%
   geom_line(aes(date, bsn), linewidth = 1, col = cols[3])+
   theme_bw()
 
-# ggsave("figures/p3.png",
-#        w = 6, h = 2)
-
 # excess estimation
 exc <- 
   bsn %>% 
@@ -262,7 +140,7 @@ exc <-
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # comparing excess estimation approaches ====
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -279,8 +157,9 @@ bsns <-
               select(year, week, date, dts, bsn) %>% 
               mutate(type = "poisson_model"))
 unique(bsns$type)
-# plotting the three baselines
 
+# plotting the three baselines
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 p_bsns <- 
   bsns %>% 
   ggplot()+
@@ -290,9 +169,7 @@ p_bsns <-
   theme_bw()
 p_bsns
 
-# ggsave("figures/p4.png",
-#        w = 6, h = 2)
-
+# estimating excess = observed - counterfactual scenario
 excs <- 
   bsns %>% 
   mutate(exc = dts - bsn,
@@ -307,8 +184,6 @@ excs %>%
   geom_hline(yintercept = 0, linetype = "dashed")+
   scale_color_manual(values = cols)+
   theme_bw()
-# ggsave("figures/p5.png",
-#        w = 6, h = 2)
 
 # visualizing cumulative excess
 excs %>% 
@@ -319,8 +194,6 @@ excs %>%
   # geom_line(aes(date, exc))+
   geom_line(aes(date, exc_cum, col = type), linewidth = 1)+
   theme_bw()
-# ggsave("figures/p6.png",
-#        w = 6, h = 2)
 
 
 # obtaining annual excess
@@ -362,33 +235,145 @@ yr_exc %>%
   labs(fill = "year")+
   coord_cartesian(expand = 0)+
   theme_bw()
-# ggsave("figures/p7.png",
-#        w = 8, h = 3)
 
 
 # Looking at the four years 2020-2023, estimates using averages overestimate in 
 # 84% those obtained from the Poisson model!!!
 
-
-# ~~~~~~~~~~~~~~~~~~~~~~~~~
-# Assignment in class: ====
-# ~~~~~~~~~~~~~~~~~~~~~~~~~
-# Estimate excess mortality in the same countries you have been working these 
-# days, using the three methods and calculate the potential bias when using the
-# two average approaches (weekly average and week-specific average)
-
-# what would be the source of the difference?
-
-
-
-
 # ~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~
-# for lazy people:
 
+# a function for analyzing different countries:
+
+# let's compare Canada with the estimates we already obtained 
 excess <-
   obtain_excess(cd = "CAN", sx = "b", ag = "TOT", ymin = 2015)
+
 excess[[1]]
 excess[[2]]
 excess[[3]] %>% spread(type, exc)
 
+# Now, let's look at other countries 
+excess <-
+  obtain_excess(cd = "NZL", sx = "b", ag = "TOT", ymin = 2015)
+
+excess[[1]]
+excess[[2]]
+excess[[3]] %>% spread(type, exc)
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# Now, let's look at disturbances beyond mortality
+
+# monthly births in Brazil, Colombia, and Mexico
+bts <- 
+  read_csv("data_input/births_bra_col_mx_2015_2022.csv") 
+
+bts %>% 
+  ggplot(aes(date, bts))+
+  geom_point()+
+  geom_line()+
+  facet_grid(country~.,
+             scales = "free_y")+
+  theme_bw()
+
+bra <- 
+  bts %>% 
+  filter(country == "BRA")
+
+# plotting monthly births
+bra %>% 
+  ggplot(aes(date, bts))+
+  geom_point()+
+  geom_line()+
+  theme_bw()
+
+# excluding covid period (> March 2020)
+covid <- seq(ymd('2020-03-15'),ymd('2021-12-15'), by = '1 month')
+
+bra2 <- 
+  bra %>% 
+  mutate(per = case_when(date %in% covid ~ "covid",
+                         TRUE ~ "typical"),
+         # weights with value 0 during COVID
+         w = ifelse(date %in% covid, 0, 1))
+
+# fitting a GAM model with loglinear and cyclical terms
+md <- 
+  gam(bts ~ t + s(mth, bs = 'cp'), 
+      weights = w,
+      data = bra2,
+      family = "quasipoisson")
+
+# predicting the model
+p <- predict(md, newdata = bra2, type = "response", se.fit = TRUE)
+
+# obtaining the baseline and confidence intervals
+bra3 <- 
+  bra2 %>% 
+  mutate(bsn = p$fit,
+         ul = p$fit + (2 * p$se.fit),
+         ll = p$fit - (2 * p$se.fit))
+
+# plotting
+bra3 %>% 
+  ggplot()+
+  geom_ribbon(aes(date, ymin = ll, ymax = ul), fill = "red", alpha = 0.3)+
+  geom_point(aes(date, bts))+
+  geom_line(aes(date, bts))+
+  geom_line(aes(date, bsn), col = "red")+
+  theme_bw()
+
+
+# excluding periods affected by Zika
+# National emergency Nov 2015 - Nov 2016
+# seems like 7-month lag for the effect
+zica <- seq(ymd('2016-05-15'),ymd('2017-05-15'), by = '1 month')
+
+bra2 <- 
+  bra %>% 
+  mutate(per = case_when(date %in% zica ~ "zica",
+                         date %in% covid ~ "covid",
+                         TRUE ~ "typical"),
+         # weights with value 0 during Zika and COVID
+         w = ifelse(date %in% c(zica, covid), 0, 1))
+
+md <- 
+  gam(bts ~ t + 
+        s(mth, bs = 'cp'), 
+      weights = w,
+      data = bra2,
+      family = "quasipoisson")
+
+p <- predict(md, newdata = bra2, type = "response", se.fit = TRUE)
+
+bra3 <- 
+  bra2 %>% 
+  mutate(bsn = p$fit,
+         ul = p$fit + (2 * p$se.fit),
+         ll = p$fit - (2 * p$se.fit))
+
+bra3 %>% 
+  ggplot()+
+  geom_ribbon(aes(date, ymin = ll, ymax = ul), fill = "red", alpha = 0.3)+
+  geom_point(aes(date, bts))+
+  geom_line(aes(date, bts))+
+  geom_line(aes(date, bsn), col = "red")+
+  theme_bw()
+
+# now, let's summarize the disturbances during each crisis
+bra3 %>% 
+  summarise(bts = sum(bts),
+            bsn = round(sum(bsn)),
+            exc = bts - bsn,
+            psc = 100*exc/bsn,
+            mts = n(),
+            .by = c(per))
+
+
+# Assignment: what is the impact of the C19 pandemic on births in 
+# Colombia and Mexico? 

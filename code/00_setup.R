@@ -330,6 +330,8 @@ plot_carst <-
 obtain_excess <- 
   function(cd, sx, ag, ymin){
     
+    zip_files <- unzip("data_input/STMFinput.zip", list = TRUE)
+    
     file_name <- zip_files %>% filter(str_detect(Name, cd)) %>% pull(Name)
     
     dt <- 
