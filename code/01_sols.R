@@ -7,6 +7,12 @@
 rm(list=ls())
 source("code/00_setup.R")
 
+
+# at different ages, proportional changes, and ratios, among others...
+hmd <- read_rds("data_input/hmd_dts_pop.rds")
+head(hmd)
+unique(hmd$code)
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~
 # Assignment in class: ====
 # ~~~~~~~~~~~~~~~~~~~~~~~~~
